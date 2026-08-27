@@ -4,10 +4,13 @@
 // opens a pairing link once; its payload lives in the URL fragment, which the
 // browser never sends to any server. The parsed pairing is kept in
 // device-local storage and the fragment is stripped immediately.
+//
+// The pairing also carries the environment identity, so the same bundle can be
+// pointed at the DEV or the PROD backend without any code change.
 
-import {PAIRING_FRAGMENT_PARAM, PAIRING_STORAGE_KEY} from "./config.js";
+import {ENVIRONMENTS, PAIRING_FRAGMENT_PARAM, PAIRING_STORAGE_KEY} from "./config.js";
 
-const EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+const EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/([A-Za-z0-9_-]+)\/exec$/;
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
 
 export function decodeBase64Url(value) {
@@ -21,13 +24,24 @@ export function decodeBase64Url(value) {
   return Buffer.from(padded, "base64").toString("utf8");
 }
 
+export function backendId(apiUrl) {
+  const match = EXEC_URL_PATTERN.exec(String(apiUrl || ""));
+  return match ? match[1] : "";
+}
+
 export function validatePairing(candidate) {
   if (!candidate || typeof candidate !== "object") return null;
   const api = String(candidate.api || "").trim();
   const key = String(candidate.key || "").trim();
+  const env = String(candidate.env || "").trim();
+  // Only an Apps Script /exec endpoint is accepted, so a hostile link cannot
+  // repoint the app at an arbitrary host.
   if (!EXEC_URL_PATTERN.test(api)) return null;
   if (!KEY_PATTERN.test(key)) return null;
-  return {api, key, env: String(candidate.env || "dev")};
+  // The environment must be explicit: an unlabelled pairing is never guessed,
+  // because guessing wrong would let one environment read another's cache.
+  if (ENVIRONMENTS.indexOf(env) < 0) return null;
+  return {api, key, env};
 }
 
 export function parsePairingFragment(hash) {
@@ -48,6 +62,19 @@ export function buildSnapshotUrl(pairing, route) {
   url.searchParams.set("p18", route || "snapshot");
   url.searchParams.set("k", pairing.key);
   return url.toString();
+}
+
+// Cache namespace: one record per environment and backend deployment, so a DEV
+// snapshot can never be read back as PROD data or merged into it.
+export function pairingRecordKey(pairing) {
+  const valid = validatePairing(pairing);
+  if (!valid) return "";
+  return valid.env + ":" + backendId(valid.api);
+}
+
+export function isSamePairing(left, right) {
+  if (!left || !right) return false;
+  return left.env === right.env && left.api === right.api && left.key === right.key;
 }
 
 export function createPairingStore(storage) {

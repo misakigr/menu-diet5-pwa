@@ -1,7 +1,7 @@
 // Pure view layer: every function returns an HTML string for a given state.
 // Keeping rendering free of DOM access makes the whole UI testable in Node.
 
-import {DAY_TITLES} from "./config.js";
+import {DAY_TITLES, ENVIRONMENT_LABELS} from "./config.js";
 import {
   dayHeadline, escapeHtml, fullDateLabel, ingredientsHeading,
   itemsLabel, relativeFreshness
@@ -27,10 +27,19 @@ export function renderTopbar(state) {
   const title = route.name === "shopping" ? "Покупки" : (DAY_TITLES[route.day] || "Сегодня");
   const subtitle = day ? dayHeadline(day.date) : "";
   return `<div class="topbar-inner">
-    <h1 class="topbar-title">${escapeHtml(title)}</h1>
+    <h1 class="topbar-title">${escapeHtml(title)}${renderEnvironmentBadge(state)}</h1>
     ${subtitle ? `<p class="topbar-subtitle">${escapeHtml(subtitle)}</p>` : ""}
     ${renderStatusPill(state)}
   </div>`;
+}
+
+// The active environment is shown, never the endpoint or the key. Knowing
+// whether the screen holds DEV or PROD data matters; the credential does not
+// belong in any view.
+export function renderEnvironmentBadge(state) {
+  const label = ENVIRONMENT_LABELS[state.environment];
+  if (!label) return "";
+  return ` <span class="envbadge envbadge--${escapeHtml(state.environment)}">${escapeHtml(label)}</span>`;
 }
 
 export function renderStatusPill(state) {
@@ -184,10 +193,16 @@ export function renderSetup(state) {
     ? `<p class="formerror" role="alert">${escapeHtml(state.setupError)}</p>` : "";
   return section(`
     <div class="card intro">
-      <h2 class="intro-title">Подключение к DEV-данным</h2>
+      <h2 class="intro-title">Подключение к данным</h2>
       <p class="intro-text">Приложение не хранит адресов и ключей в опубликованном коде.
       Откройте одноразовую ссылку подключения — или вставьте её целиком в поле ниже.
       Данные подключения останутся только на этом устройстве.</p>
+      <p class="intro-text">Одна и та же ссылка определяет, к какой среде подключено
+      устройство. Повторное подключение заменяет текущую среду; кэш каждой среды
+      хранится отдельно.</p>
+      ${state.environment ? `<p class="intro-status">Текущая среда:
+        <span class="envbadge envbadge--${escapeHtml(state.environment)}">${
+          escapeHtml(ENVIRONMENT_LABELS[state.environment] || state.environment)}</span></p>` : ""}
     </div>
     <form class="card form" id="setup-form">
       <label class="field">

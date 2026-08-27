@@ -4,16 +4,22 @@
 // hundred kilobytes, and IndexedDB keeps it off the synchronous main-thread
 // path. A memory adapter is used when IndexedDB is unavailable (private mode,
 // blocked site data) and by the automated tests.
+//
+// Every operation is keyed, so one database holds one independent record per
+// environment and backend deployment.
 
-import {CACHE_DB_NAME, CACHE_RECORD_KEY, CACHE_STORE_NAME, CACHE_SCHEMA_VERSION} from "./config.js";
+import {CACHE_DB_NAME, CACHE_STORE_NAME, CACHE_SCHEMA_VERSION} from "./config.js";
 
 export function createMemoryAdapter(initial) {
-  let value = initial === undefined ? null : initial;
+  const values = new Map();
+  if (initial && typeof initial === "object") {
+    for (const [key, value] of Object.entries(initial)) values.set(key, value);
+  }
   return {
     engine: "memory",
-    async get() { return value; },
-    async put(record) { value = record; },
-    async clear() { value = null; }
+    async get(key) { return values.has(key) ? values.get(key) : null; },
+    async put(key, record) { values.set(key, record); },
+    async clear(key) { values.delete(key); }
   };
 }
 
@@ -54,14 +60,14 @@ export function createIndexedDbAdapter(indexedDB) {
   }
   return {
     engine: "indexeddb",
-    async get() {
-      return runTransaction(await db(), "readonly", store => store.get(CACHE_RECORD_KEY));
+    async get(key) {
+      return runTransaction(await db(), "readonly", store => store.get(key));
     },
-    async put(record) {
-      await runTransaction(await db(), "readwrite", store => store.put(record, CACHE_RECORD_KEY));
+    async put(key, record) {
+      await runTransaction(await db(), "readwrite", store => store.put(record, key));
     },
-    async clear() {
-      await runTransaction(await db(), "readwrite", store => store.delete(CACHE_RECORD_KEY));
+    async clear(key) {
+      await runTransaction(await db(), "readwrite", store => store.delete(key));
     }
   };
 }
@@ -71,7 +77,7 @@ export async function createBestAdapter(globalScope) {
   if (!indexedDB) return createMemoryAdapter(null);
   try {
     const adapter = createIndexedDbAdapter(indexedDB);
-    await adapter.get();
+    await adapter.get("probe");
     return adapter;
   } catch (error) {
     return createMemoryAdapter(null);

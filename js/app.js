@@ -1,9 +1,17 @@
 // Application shell: the only module that touches the DOM, storage engines and
 // the network. All decision logic lives in the pure modules it imports.
+//
+// One bundle serves both environments. The active pairing decides which backend
+// is called and which cache namespace is used; nothing about the environment is
+// baked into the published code.
 
 import {ApiError, fetchSnapshot} from "./api.js";
+import {CACHE_LEGACY_RECORD_KEY} from "./config.js";
 import {localDateKey} from "./format.js";
-import {createPairingStore, parsePairingFragment, validatePairing} from "./pairing.js";
+import {
+  createPairingStore, isSamePairing, pairingRecordKey,
+  parsePairingFragment, validatePairing
+} from "./pairing.js";
 import {activeTab, parseRoute, routeHref} from "./router.js";
 import {createBestAdapter} from "./storage.js";
 import {createSnapshotStore, isRolledOver, shouldReplace} from "./store.js";
@@ -22,6 +30,7 @@ const state = {
   record: null,
   loading: true,
   paired: false,
+  environment: "",
   status: {kind: "refreshing", now: Date.now()},
   setupError: "",
   activeTab: "today"
@@ -29,6 +38,7 @@ const state = {
 
 const pairingStore = createPairingStore(safeLocalStorage());
 let pairing = null;
+let adapter = null;
 let snapshotStore = null;
 let refreshing = false;
 
@@ -58,6 +68,7 @@ function render() {
   elements.tabbar.hidden = state.route.name === "setup" || (!state.snapshot && !state.paired);
   elements.tabbar.innerHTML = elements.tabbar.hidden ? "" : renderTabbar(state);
   elements.app.dataset.route = state.route.name;
+  elements.app.dataset.environment = state.environment || "";
 }
 
 function setStatus(kind, extra) {
@@ -85,25 +96,54 @@ function freshnessStatus() {
   return setStatus("fresh", {fetchedAt: state.record.fetchedAt});
 }
 
+// The store is rebuilt whenever the active pairing changes, so the record key
+// and the expected environment always match the backend actually in use.
+function useStore(activePairing) {
+  pairing = activePairing;
+  state.paired = Boolean(activePairing);
+  state.environment = activePairing ? activePairing.env : "";
+  snapshotStore = activePairing && adapter
+    ? createSnapshotStore(adapter, {
+        recordKey: pairingRecordKey(activePairing),
+        environment: activePairing.env
+      })
+    : null;
+}
+
+async function loadCached() {
+  if (!snapshotStore) {
+    applyRecord(null);
+    return null;
+  }
+  const record = await snapshotStore.load();
+  applyRecord(record);
+  if (record) freshnessStatus();
+  return record;
+}
+
 async function refresh(options) {
   const settings = options || {};
-  if (refreshing || !pairing) return;
+  if (refreshing || !pairing || !snapshotStore) return;
+  const activeStore = snapshotStore;
+  const activePairing = pairing;
   refreshing = true;
   if (settings.showSpinner || !state.snapshot) setStatus("refreshing");
   render();
   try {
-    const snapshot = await fetchSnapshot(pairing);
-    if (shouldReplace(state.record, snapshot)) {
-      const record = await snapshotStore.save(snapshot);
+    const snapshot = await fetchSnapshot(activePairing);
+    // A pairing change during the request invalidates this response entirely.
+    if (!isSamePairing(activePairing, pairing)) return;
+    if (shouldReplace(state.record, snapshot, activePairing.env)) {
+      const record = await activeStore.save(snapshot);
       if (record) applyRecord(record);
     } else if (state.record) {
-      // Same fingerprint: keep the stored record and only refresh its age.
-      state.record = Object.assign({}, state.record, {fetchedAt: Date.now()});
-      await snapshotStore.save(state.record.snapshot);
+      // Same fingerprint: keep the stored snapshot and only refresh its age.
+      applyRecord(await activeStore.touch(state.record));
     }
     state.loading = false;
     freshnessStatus();
   } catch (error) {
+    if (!isSamePairing(activePairing, pairing)) return;
     state.loading = false;
     const code = error instanceof ApiError ? error.code : "unknown";
     if (state.record) {
@@ -126,21 +166,27 @@ async function refresh(options) {
   }
 }
 
-function adoptPairing(candidate) {
+async function adoptPairing(candidate) {
   const valid = validatePairing(candidate);
   if (!valid) return false;
-  pairing = pairingStore.write(valid);
-  state.paired = Boolean(pairing);
-  return state.paired;
+  if (isSamePairing(valid, pairing)) return true;
+  const stored = pairingStore.write(valid);
+  if (!stored) return false;
+  // Switching backend must never show the previous environment's data: the
+  // rendered snapshot is dropped before the new namespace is read.
+  applyRecord(null);
+  state.loading = true;
+  useStore(stored);
+  await loadCached();
+  return true;
 }
 
 function consumePairingFragment() {
   const fromFragment = parsePairingFragment(location.hash);
-  if (!fromFragment) return false;
-  const adopted = adoptPairing(fromFragment);
+  if (!fromFragment) return null;
   // Strip the credential from the address bar and history entry immediately.
   history.replaceState(null, "", location.pathname + location.search + "#/today");
-  return adopted;
+  return fromFragment;
 }
 
 function onNavigate(event) {
@@ -158,10 +204,9 @@ function onNavigate(event) {
   const forget = event.target.closest("#setup-forget");
   if (forget) {
     event.preventDefault();
+    if (snapshotStore) snapshotStore.clear();
     pairingStore.clear();
-    pairing = null;
-    state.paired = false;
-    snapshotStore.clear();
+    useStore(null);
     applyRecord(null);
     location.hash = "#/setup";
     render();
@@ -175,31 +220,38 @@ function onSubmit(event) {
   const value = String((document.getElementById("setup-link") || {}).value || "").trim();
   const hashIndex = value.indexOf("#");
   const parsed = hashIndex >= 0 ? parsePairingFragment(value.slice(hashIndex)) : null;
-  if (!parsed || !adoptPairing(parsed)) {
+  if (!parsed) {
     state.setupError = "Ссылка не распознана. Скопируйте её полностью, вместе с частью после «#».";
     render();
     return;
   }
-  state.setupError = "";
-  location.hash = "#/today";
-  refresh({showSpinner: true});
+  adoptPairing(parsed).then(adopted => {
+    if (!adopted) {
+      state.setupError = "Ссылка не распознана. Скопируйте её полностью, вместе с частью после «#».";
+      render();
+      return;
+    }
+    state.setupError = "";
+    location.hash = "#/today";
+    render();
+    refresh({showSpinner: true});
+  });
 }
 
 async function start() {
-  consumePairingFragment();
-  pairing = pairing || pairingStore.read();
-  state.paired = Boolean(pairing);
+  const fromFragment = consumePairingFragment();
+  adapter = await createBestAdapter(window);
+  // A Phase 18 record was stored without an environment namespace; it is
+  // dropped once rather than migrated, so nothing untyped can ever be rendered.
+  try { await adapter.clear(CACHE_LEGACY_RECORD_KEY); } catch (error) { /* nothing to recover */ }
 
-  const adapter = await createBestAdapter(window);
-  snapshotStore = createSnapshotStore(adapter);
-
-  const record = await snapshotStore.load();
-  if (record) {
-    applyRecord(record);
-    freshnessStatus();
+  useStore(fromFragment ? pairingStore.write(fromFragment) : pairingStore.read());
+  if (pairing) {
+    await loadCached();
+    state.loading = !state.record;
   } else {
-    state.loading = Boolean(pairing);
-    if (!pairing) setStatus("fresh");
+    applyRecord(null);
+    setStatus("fresh");
   }
   render();
 
@@ -234,4 +286,4 @@ start().catch(() => {
   render();
 });
 
-export {localDateKey};
+export {localDateKey, routeHref};

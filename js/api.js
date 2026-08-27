@@ -56,7 +56,8 @@ export async function fetchSnapshot(pairing, options) {
     if (code === "forbidden") throw new ApiError("forbidden", "Ключ доступа отклонён");
     throw new ApiError(code, "Данные недоступны");
   }
-  if (!validateSnapshot(payload.snapshot)) {
+  // The snapshot must declare the same environment the device is paired to.
+  if (!validateSnapshot(payload.snapshot, pairing.env)) {
     throw new ApiError("malformed", "Снимок данных не прошёл проверку");
   }
   return payload.snapshot;
