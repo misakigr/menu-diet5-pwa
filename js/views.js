@@ -104,7 +104,7 @@ export function renderDay(state) {
       <span class="chevron" aria-hidden="true"></span>
     </a>`).join("");
   return section(`
-    <p class="section-caption">${escapeHtml(day.meals.length)} приёма пищи · расчёт на ${
+    <p class="section-caption">${escapeHtml(day.meals.length)} приёмов пищи · расчёт на ${
       escapeHtml(persons)} ${escapeHtml(state.snapshot.meta.personsLabel || "")}</p>
     <div class="stack">${cards}</div>
     ${renderShoppingLink(day)}`);
