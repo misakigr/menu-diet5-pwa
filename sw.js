@@ -4,7 +4,7 @@
 // the service worker: they carry the device access key in the request URL and
 // belong in the versioned IndexedDB cache the app manages itself.
 
-const SHELL_VERSION = "phase19-shell-v1";
+const SHELL_VERSION = "phase19-shell-v2";
 const SHELL_ASSETS = [
   "./",
   "./index.html",
