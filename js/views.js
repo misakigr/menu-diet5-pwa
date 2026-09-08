@@ -1,6 +1,8 @@
 // Pure view layer: every function returns an HTML string for a given state.
 // Keeping rendering free of DOM access makes the whole UI testable in Node.
 
+import {APP_VERSION} from "./release.js";
+import {checklistDate, productIdentity} from "./checklist.js";
 import {DAY_TITLES, ENVIRONMENT_LABELS} from "./config.js";
 import {
   dayHeadline, escapeHtml, fullDateLabel, ingredientsHeading,
@@ -9,24 +11,27 @@ import {
 
 export function renderTopbar(state) {
   const {route, snapshot} = state;
+  const version = `<span class="app-version" aria-label="Версия приложения ${APP_VERSION}">v${APP_VERSION}</span>`;
+  const refresh = state.refreshing ? `<span class="refresh-indicator" role="status"><svg class="hourglass" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10M7 21h10M8 3v5l8 8v5M16 3v5l-8 8v5M9 7h6M9 18h6"/></svg><span>Обновляем</span></span>` : "";
+  const tools = `<div class="topbar-tools">${version}${refresh}</div>`;
   if (route.name === "setup") {
-    return `<div class="topbar-inner"><h1 class="topbar-title">Подключение</h1></div>`;
+    return `<div class="topbar-inner">${tools}<h1 class="topbar-title">Подключение</h1></div>`;
   }
   if (route.name === "dish") {
     const meal = findMeal(snapshot, route.day, route.dishId);
     const day = getDay(snapshot, route.day);
-    return `<div class="topbar-inner topbar-inner--detail">
+    return `<div class="topbar-inner topbar-inner--detail">${tools}
       <a class="backlink" href="#/${escapeHtml(route.day)}" data-nav>
         <span class="backlink-chevron" aria-hidden="true"></span>${escapeHtml(DAY_TITLES[route.day] || "Назад")}
       </a>
       <p class="topbar-eyebrow">${escapeHtml(meal ? meal.mealLabel : "Блюдо")}${
-        day ? " · " + escapeHtml(fullDateLabel(day.date)) : ""}</p>
+        day ? " · " + escapeHtml(fullDateLabel(day.date)) : ""}${renderEnvironmentBadge(state)}</p>${renderStatusPill(state)}
     </div>`;
   }
   const day = getDay(snapshot, route.day);
   const title = route.name === "shopping" ? "Покупки" : (DAY_TITLES[route.day] || "Сегодня");
   const subtitle = day ? dayHeadline(day.date) : "";
-  return `<div class="topbar-inner">
+  return `<div class="topbar-inner">${tools}
     <h1 class="topbar-title">${escapeHtml(title)}${renderEnvironmentBadge(state)}</h1>
     ${subtitle ? `<p class="topbar-subtitle">${escapeHtml(subtitle)}</p>` : ""}
     ${renderStatusPill(state)}
@@ -174,18 +179,26 @@ export function renderShopping(state) {
       "На " + fullDateLabel(day.date) + " покупки не рассчитаны."
     )}`);
   }
-  const rows = day.shopping.items.map(item => `
-    <li class="product">
-      <span class="product-emoji" aria-hidden="true">${escapeHtml(item.emoji)}</span>
+  const enabled = Boolean(checklistDate(state.snapshot, state.route.day, state.status?.now));
+  const checked = enabled ? (state.checklist?.checked || new Set()) : new Set();
+  const count = day.shopping.items.filter(item => checked.has(productIdentity(item))).length;
+  const progress = enabled ? `<p class="checklist-progress" role="status">${count} из ${day.shopping.items.length} куплено<span>Отметки на сегодня</span></p>${state.checklist?.persistent === false ? '<p class="section-caption">Хранилище недоступно: отметки сохранятся только до закрытия приложения.</p>' : ""}` : "";
+  const rows = day.shopping.items.map(item => {
+    const identity = productIdentity(item);
+    const purchased = checked.has(identity);
+    const content = `<span class="product-emoji" aria-hidden="true">${escapeHtml(item.emoji)}</span>
       <span class="product-name">${escapeHtml(item.product)}</span>
-      <span class="product-qty">${escapeHtml(item.quantity)}</span>
-    </li>`).join("");
+      <span class="product-qty">${escapeHtml(item.quantity)}</span>`;
+    return `<li class="product${purchased ? " product--checked" : ""}${enabled ? " product--interactive" : ""}">${enabled && identity
+      ? `<button type="button" class="purchase-row" data-purchase="${escapeHtml(identity)}" aria-pressed="${purchased}" aria-label="${escapeHtml(item.product + ", " + item.quantity)}"><span class="check-circle" aria-hidden="true">${purchased ? "✓" : ""}</span>${content}</button>`
+      : content}</li>`;
+  }).join("");
   return section(`
     ${segmented}
     <p class="section-caption">${escapeHtml(fullDateLabel(day.date))} · на ${escapeHtml(persons)} ${
       escapeHtml(state.snapshot.meta.personsLabel || "")} · ${escapeHtml(day.shopping.items.length)} ${
       escapeHtml(itemsLabel(day.shopping.items.length))}</p>
-    <div class="card"><ul class="products">${rows}</ul></div>`);
+    ${progress}<div class="card shopping-card"><ul class="products">${rows}</ul></div>`);
 }
 
 export function renderSetup(state) {

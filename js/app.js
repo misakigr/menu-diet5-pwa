@@ -5,6 +5,7 @@
 // is called and which cache namespace is used; nothing about the environment is
 // baked into the published code.
 
+import {checklistDate, createChecklistStore, nextDateDelay, productIdentity} from "./checklist.js";
 import {ApiError, fetchSnapshot} from "./api.js";
 import {CACHE_LEGACY_RECORD_KEY} from "./config.js";
 import {localDateKey} from "./format.js";
@@ -36,7 +37,10 @@ const state = {
   activeTab: "today"
 };
 
-const pairingStore = createPairingStore(safeLocalStorage());
+const localStorage = safeLocalStorage();
+const pairingStore = createPairingStore(localStorage);
+const checklistStore = createChecklistStore(localStorage);
+let dateTimer = null;
 let pairing = null;
 let adapter = null;
 let snapshotStore = null;
@@ -52,6 +56,7 @@ function safeLocalStorage() {
   } catch (error) {
     const memory = new Map();
     return {
+      persistent: false,
       getItem: key => (memory.has(key) ? memory.get(key) : null),
       setItem: (key, value) => memory.set(key, String(value)),
       removeItem: key => memory.delete(key)
@@ -63,12 +68,32 @@ function render() {
   state.route = parseRoute(location.hash);
   state.activeTab = activeTab(state.route);
   state.status.now = Date.now();
+  const date = checklistDate(state.snapshot, state.route.day, state.status.now);
+  state.checklist = {
+    date,
+    checked: date && pairing ? checklistStore.read(pairingRecordKey(pairing), date) : new Set(),
+    persistent: checklistStore.persistent
+  };
+  state.refreshing = refreshing && navigator.onLine;
+  if (state.record && isRolledOver(state.record, state.status.now)) freshnessStatus();
+  scheduleDateBoundary();
   elements.topbar.innerHTML = renderTopbar(state);
   elements.screen.innerHTML = renderScreen(state);
   elements.tabbar.hidden = state.route.name === "setup" || (!state.snapshot && !state.paired);
   elements.tabbar.innerHTML = elements.tabbar.hidden ? "" : renderTabbar(state);
   elements.app.dataset.route = state.route.name;
   elements.app.dataset.environment = state.environment || "";
+}
+
+function scheduleDateBoundary() {
+  if (!window.setTimeout) return;
+  window.clearTimeout(dateTimer);
+  if (!state.snapshot || document.visibilityState === "hidden") return;
+  dateTimer = window.setTimeout(() => {
+    freshnessStatus();
+    render();
+    if (navigator.onLine) refresh();
+  }, nextDateDelay(state.snapshot.meta.timezone));
 }
 
 function setStatus(kind, extra) {
@@ -163,6 +188,7 @@ async function refresh(options) {
   } finally {
     refreshing = false;
     render();
+    if (pairing && !isSamePairing(activePairing, pairing)) refresh();
   }
 }
 
@@ -190,6 +216,22 @@ function consumePairingFragment() {
 }
 
 function onNavigate(event) {
+  const purchase = event.target.closest("[data-purchase]");
+  if (purchase) {
+    event.preventDefault();
+    const date = checklistDate(state.snapshot, state.route.day);
+    const identity = purchase.dataset.purchase;
+    const items = state.snapshot?.days.today.shopping.items || [];
+    if (date && pairing && items.some(item => productIdentity(item) === identity)) {
+      checklistStore.toggle(pairingRecordKey(pairing), date, identity);
+    }
+    render();
+    // Re-rendered buttons keep keyboard / assistive-technology focus.
+    elements.screen.querySelectorAll?.("[data-purchase]").forEach(button => {
+      if (button.dataset.purchase === identity) button.focus({preventScroll: true});
+    });
+    return;
+  }
   const link = event.target.closest("a[data-nav]");
   if (link) {
     // Let the hash change drive rendering; no full page load on GitHub Pages.
@@ -265,16 +307,27 @@ async function start() {
   });
   document.addEventListener("click", onNavigate);
   document.addEventListener("submit", onSubmit);
+  window.addEventListener("storage", event => {
+    if (event.key?.startsWith("menu.shopping.v1:")) render();
+  });
+  window.addEventListener("pageshow", () => { freshnessStatus(); render(); });
   window.addEventListener("online", () => refresh());
   window.addEventListener("offline", () => { freshnessStatus(); render(); });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") refresh();
+    if (document.visibilityState === "visible") {
+      freshnessStatus(); render(); refresh();
+    } else if (window.clearTimeout) window.clearTimeout(dateTimer);
   });
 }
 
 if ("serviceWorker" in navigator) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !reloading) { reloading = true; location.reload(); }
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js", {scope: "./"}).catch(() => {
+    navigator.serviceWorker.register("./sw.js", {scope: "./", updateViaCache: "none"}).catch(() => {
       // A blocked service worker only costs offline shell caching.
     });
   });
