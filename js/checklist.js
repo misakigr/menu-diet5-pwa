@@ -19,10 +19,12 @@ export function checklistDate(snapshot, day, now = Date.now()) {
 
 export function createChecklistStore(storage) {
   const memory = new Map();
+  const volatileKeys = new Set();
   let persistent = storage?.persistent !== false;
   function read(namespace, date) {
     if (!namespace || !date) return new Set();
     const key = PREFIX + namespace + ":" + date;
+    if (volatileKeys.has(key)) return new Set(memory.get(key) || []);
     try {
       // Expire only our own other-date records for this environment/deployment.
       for (let i = storage.length - 1; i >= 0; i--) {
@@ -54,7 +56,7 @@ export function createChecklistStore(storage) {
       if (checked.has(identity)) checked.delete(identity); else checked.add(identity);
       const key = PREFIX + namespace + ":" + date;
       memory.set(key, [...checked]);
-      try { storage.setItem(key, JSON.stringify([...checked])); } catch (_) { persistent = false; }
+      try { storage.setItem(key, JSON.stringify([...checked])); } catch (_) { persistent = false; volatileKeys.add(key); }
     }
   };
 }
