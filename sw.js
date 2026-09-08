@@ -4,7 +4,7 @@
 // the service worker: they carry the device access key in the request URL and
 // belong in the versioned IndexedDB cache the app manages itself.
 
-const SHELL_VERSION = "menu-diet5-shell-v2.0.1-91de97f1f1ca46f8";
+const SHELL_VERSION = "menu-diet5-shell-v2.0.2-c151dca9eaef55d6";
 const SHELL_ASSETS = [
   "./",
   "./icons/apple-touch-icon.png",
