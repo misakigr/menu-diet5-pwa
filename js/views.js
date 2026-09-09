@@ -179,10 +179,11 @@ export function renderShopping(state) {
       "На " + fullDateLabel(day.date) + " покупки не рассчитаны."
     )}`);
   }
-  const enabled = Boolean(checklistDate(state.snapshot, state.route.day, state.status?.now));
-  const checked = enabled ? (state.checklist?.checked || new Set()) : new Set();
+  const date = checklistDate(state.snapshot, state.route.day, state.status?.now);
+  const enabled = Boolean(date);
+  const checked = enabled && state.checklist?.date === date ? (state.checklist.checked || new Set()) : new Set();
   const count = day.shopping.items.filter(item => checked.has(productIdentity(item))).length;
-  const progress = enabled ? `<p class="checklist-progress" role="status">${count} из ${day.shopping.items.length} куплено<span>Отметки на сегодня</span></p>${state.checklist?.persistent === false ? '<p class="section-caption">Хранилище недоступно: отметки сохранятся только до закрытия приложения.</p>' : ""}` : "";
+  const progress = enabled ? `<p class="checklist-progress" role="status">${count} из ${day.shopping.items.length} куплено<span>Отметки на завтра</span></p>${state.checklist?.persistent === false ? '<p class="section-caption">Хранилище недоступно: отметки сохранятся только до закрытия приложения.</p>' : ""}` : "";
   const rows = day.shopping.items.map(item => {
     const identity = productIdentity(item);
     const purchased = checked.has(identity);
@@ -190,7 +191,7 @@ export function renderShopping(state) {
       <span class="product-name">${escapeHtml(item.product)}</span>
       <span class="product-qty">${escapeHtml(item.quantity)}</span>`;
     return `<li class="product${purchased ? " product--checked" : ""}${enabled ? " product--interactive" : ""}">${enabled && identity
-      ? `<button type="button" class="purchase-row" data-purchase="${escapeHtml(identity)}" aria-pressed="${purchased}" aria-label="${escapeHtml(item.product + ", " + item.quantity)}"><span class="check-circle" aria-hidden="true">${purchased ? "✓" : ""}</span>${content}</button>`
+      ? `<button type="button" class="purchase-row" data-purchase="${escapeHtml(identity)}" data-purchase-date="${escapeHtml(date)}" data-purchase-namespace="${escapeHtml(state.checklist?.namespace || "")}" aria-pressed="${purchased}" aria-label="${escapeHtml(item.product + ", " + item.quantity)}"><span class="check-circle" aria-hidden="true">${purchased ? "✓" : ""}</span>${content}</button>`
       : content}</li>`;
   }).join("");
   return section(`

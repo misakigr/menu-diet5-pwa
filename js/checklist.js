@@ -1,7 +1,8 @@
 // Device-local purchase state. No network, credentials or snapshot writes.
-import {localDateKey} from "./format.js";
+import {isoParts, localDateKey} from "./format.js";
 
-const PREFIX = "menu.shopping.v1:";
+// Today-only v1 records are deliberately not interpreted as Tomorrow purchases.
+export const CHECKLIST_PREFIX = "menu.shopping.tomorrow.v1:";
 const normalize = value => String(value || "").normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru-RU");
 
 // The API aggregates canonical product names, but does not expose product IDs.
@@ -12,25 +13,46 @@ export function productIdentity(item) {
 }
 
 export function checklistDate(snapshot, day, now = Date.now()) {
-  if (!snapshot || day !== "today") return "";
+  if (!snapshot?.meta || day !== "tomorrow") return "";
   const date = localDateKey(snapshot.meta.timezone || "Europe/Moscow", now);
-  return snapshot.meta.todayDate === date && snapshot.days.today.date === date ? date : "";
+  const tomorrow = currentTomorrowDate(snapshot.meta.timezone, now);
+  return snapshot.meta.todayDate === date && snapshot.days?.today?.date === date &&
+    snapshot.meta.tomorrowDate === tomorrow && snapshot.days?.tomorrow?.date === tomorrow ? tomorrow : "";
+}
+
+export function currentTomorrowDate(timezone, now = Date.now()) {
+  const date = isoParts(localDateKey(timezone || "Europe/Moscow", now)).date;
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
 }
 
 export function createChecklistStore(storage) {
   const memory = new Map();
   const volatileKeys = new Set();
   let persistent = storage?.persistent !== false;
-  function read(namespace, date) {
-    if (!namespace || !date) return new Set();
-    const key = PREFIX + namespace + ":" + date;
-    if (volatileKeys.has(key)) return new Set(memory.get(key) || []);
+  function expire(namespace, date) {
+    if (!namespace || !date) return;
+    const prefix = CHECKLIST_PREFIX + namespace + ":", key = prefix + date;
+    for (const old of memory.keys()) {
+      if (old.startsWith(prefix) && old !== key) {
+        memory.delete(old); volatileKeys.delete(old);
+        try { storage.removeItem(old); } catch (_) { /* Session expiry still applies. */ }
+      }
+    }
     try {
-      // Expire only our own other-date records for this environment/deployment.
+      // Expire only checklist records in the active environment/deployment.
       for (let i = storage.length - 1; i >= 0; i--) {
         const old = storage.key(i);
-        if (old?.startsWith(PREFIX + namespace + ":") && old !== key) storage.removeItem(old);
+        if (old?.startsWith(prefix) && old !== key) storage.removeItem(old);
       }
+    } catch (_) { /* Rendering/date isolation still works with blocked storage. */ }
+  }
+  function read(namespace, date) {
+    if (!namespace || !date) return new Set();
+    expire(namespace, date);
+    const key = CHECKLIST_PREFIX + namespace + ":" + date;
+    if (volatileKeys.has(key)) return new Set(memory.get(key) || []);
+    try {
       const raw = storage.getItem(key);
       if (raw !== null) {
         const data = JSON.parse(raw);
@@ -49,12 +71,13 @@ export function createChecklistStore(storage) {
   }
   return {
     read,
+    expire,
     get persistent() { return persistent; },
     toggle(namespace, date, identity) {
       if (!namespace || !date || !identity) return;
       const checked = read(namespace, date);
       if (checked.has(identity)) checked.delete(identity); else checked.add(identity);
-      const key = PREFIX + namespace + ":" + date;
+      const key = CHECKLIST_PREFIX + namespace + ":" + date;
       memory.set(key, [...checked]);
       try { storage.setItem(key, JSON.stringify([...checked])); } catch (_) { persistent = false; volatileKeys.add(key); }
     }

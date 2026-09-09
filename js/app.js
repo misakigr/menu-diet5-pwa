@@ -5,7 +5,7 @@
 // is called and which cache namespace is used; nothing about the environment is
 // baked into the published code.
 
-import {checklistDate, createChecklistStore, nextDateDelay, productIdentity} from "./checklist.js";
+import {CHECKLIST_PREFIX, checklistDate, createChecklistStore, currentTomorrowDate, nextDateDelay, productIdentity} from "./checklist.js";
 import {ApiError, fetchSnapshot} from "./api.js";
 import {CACHE_LEGACY_RECORD_KEY} from "./config.js";
 import {localDateKey} from "./format.js";
@@ -68,10 +68,13 @@ function render() {
   state.route = parseRoute(location.hash);
   state.activeTab = activeTab(state.route);
   state.status.now = Date.now();
+  const namespace = pairing ? pairingRecordKey(pairing) : "";
+  if (namespace && state.snapshot) checklistStore.expire(namespace, currentTomorrowDate(state.snapshot.meta.timezone, state.status.now));
   const date = checklistDate(state.snapshot, state.route.day, state.status.now);
   state.checklist = {
     date,
-    checked: date && pairing ? checklistStore.read(pairingRecordKey(pairing), date) : new Set(),
+    namespace,
+    checked: date && namespace ? checklistStore.read(namespace, date) : new Set(),
     persistent: checklistStore.persistent
   };
   state.refreshing = refreshing && navigator.onLine;
@@ -219,10 +222,14 @@ function onNavigate(event) {
   const purchase = event.target.closest("[data-purchase]");
   if (purchase) {
     event.preventDefault();
-    const date = checklistDate(state.snapshot, state.route.day);
+    const route = parseRoute(location.hash);
+    const date = route.name === "shopping" ? checklistDate(state.snapshot, route.day) : "";
     const identity = purchase.dataset.purchase;
-    const items = state.snapshot?.days.today.shopping.items || [];
-    if (date && pairing && items.some(item => productIdentity(item) === identity)) {
+    const shopping = state.snapshot?.days.tomorrow.shopping;
+    const items = shopping?.available ? shopping.items : [];
+    if (date && pairing && purchase.dataset.purchaseDate === date &&
+        purchase.dataset.purchaseNamespace === pairingRecordKey(pairing) &&
+        items.some(item => productIdentity(item) === identity)) {
       checklistStore.toggle(pairingRecordKey(pairing), date, identity);
     }
     render();
@@ -308,7 +315,7 @@ async function start() {
   document.addEventListener("click", onNavigate);
   document.addEventListener("submit", onSubmit);
   window.addEventListener("storage", event => {
-    if (event.key?.startsWith("menu.shopping.v1:")) render();
+    if (event.key?.startsWith(CHECKLIST_PREFIX)) render();
   });
   window.addEventListener("pageshow", () => { freshnessStatus(); render(); });
   window.addEventListener("online", () => refresh());
