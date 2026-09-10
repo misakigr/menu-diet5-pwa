@@ -541,7 +541,7 @@ body { background: var(--bg); min-height: 100svh; }
 .backlink { min-height: 44px; }
 .tabbar { left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); max-width: 608px; margin: auto; padding: 5px; border: 1px solid var(--glass-edge); border-radius: 27px; background: var(--chrome); box-shadow: 0 8px 30px rgba(15, 40, 26, .13), inset 0 1px 0 var(--glass-edge); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .tab { border-radius: 21px; font-size: 11px; color: var(--text-secondary); }
-.tab--active { background: rgba(20, 23, 29, .04); color: var(--accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .09); }
+.tab--active { background: rgba(224, 239, 255, .10); color: var(--accent); box-shadow: inset 0 0 0 1px rgba(235, 243, 255, .14), inset 0 1px 0 rgba(255, 255, 255, .20); }
 .topbar, .tabbar {
   /* Brighter small labels retain contrast over the more discernible backdrop. */
   --text-secondary: #e2e6ed;
